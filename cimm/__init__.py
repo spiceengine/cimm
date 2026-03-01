@@ -1,6 +1,6 @@
 """Top-level package for cimm (Compression Image Models)."""
 
-from compression import (
+from .compression import (
     Compression,
     CompressionBase,
     QuantizeFakeActivations,
@@ -9,9 +9,7 @@ from compression import (
     SparseUnstructuredWeights,
     compression,
 )
-from distillation import Distillation, DistillationLosses, distillation
-from utils.datasets import ImageNetDataModule
-from utils.models import build_model
+from .distillation import Distillation, DistillationLosses, distillation
 
 __version__ = "0.0.1"
 
@@ -20,12 +18,10 @@ __all__ = [
     "CompressionBase",
     "Distillation",
     "DistillationLosses",
-    "ImageNetDataModule",
     "QuantizeFakeActivations",
     "QuantizeFakeWeights",
     "SparseUnstructuredActivations",
     "SparseUnstructuredWeights",
-    "build_model",
     "compression",
     "distillation",
 ]
