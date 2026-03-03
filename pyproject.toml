@@ -3,34 +3,16 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cimm"
+name = "cizm"
 version = "0.0.1"
-description = "Compression Image Models: compression and distillation utilities for PyTorch"
+description = "Compression Image Models: compression utilities for PyTorch"
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{ name = "cimm contributors" }]
+authors = [{ name = "cizm contributors" }]
 license = "MIT"
-keywords = ["pytorch", "compression", "sparsification", "quantization", "distillation"]
-classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Intended Audience :: Developers",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
-dependencies = [
-  "torch>=2.1",
-  "torchvision>=0.16",
-]
-
-[project.optional-dependencies]
-dev = [
-  "build>=1.2.2",
-  "twine>=5.1.1",
-]
+keywords = ["pytorch", "compression", "sparsification", "quantization"]
+dependencies = ["torch>=2.0"]
 
 [tool.setuptools.packages.find]
-include = ["cimm*"]
+include = ["cizm*"]
 exclude = ["__pycache__*"]

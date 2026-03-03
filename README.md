@@ -1,41 +1,76 @@
-# cimm
+# cizm - Compression Image Models
 
-`cimm` は `Compression Image Models` の略です。
-PyTorch向けの軽量な圧縮・蒸留ユーティリティです。
+`cizm` は PyTorch 向けの軽量な圧縮ユーティリティです。
 
 ## Install
 
 ```bash
-pip install cimm
+pip install cizm
 ```
+
+## Overview
+
+- Hook ベースでモデルに圧縮を適用
+- 対応圧縮: 量子化 / 非構造スパース化
+- 対象レイヤ: `torch.nn.Conv2d`, `torch.nn.Linear`
 
 ## Quick Start
 
 ```python
 import torch
-from cimm import Compression, SparseUnstructuredWeights
+from cizm import Compression, SparseWeightUnstructured
 
-model = torch.nn.Linear(128, 10)
+model = torch.nn.Sequential(
+    torch.nn.Linear(128, 64),
+    torch.nn.ReLU(),
+    torch.nn.Linear(64, 10),
+)
+
 wrapped = Compression(model)
-wrapped.attach(SparseUnstructuredWeights, sparsity=0.5)
+wrapped.attach(
+    SparseWeightUnstructured,
+    apply_layers=lambda m: isinstance(m, torch.nn.Linear),
+    sparsity=0.5,
+)
+
+x = torch.randn(4, 128)
+y = wrapped(x)
 ```
 
-## Main APIs
+## APIs
 
-- `cimm.Compression`
-- `cimm.QuantizeFakeWeights`
-- `cimm.QuantizeFakeActivations`
-- `cimm.SparseUnstructuredWeights`
-- `cimm.SparseUnstructuredActivations`
-- `cimm.Distillation`
+- `cizm.Compression`
+- `cizm.Compressor`
+- `cizm.QuantizeWeight`
+- `cizm.QuantizeActivation`
+- `cizm.SparseWeightUnstructured`
+- `cizm.SparseActivationUnstructured`
+- `cizm.quantize`
+- `cizm.sparsify`
 
-## Build and Upload
+## Compression Classes
+
+- `QuantizeWeight(min=-128, max=127)`
+: レイヤ重みを forward 中のみ量子化します。
+
+- `QuantizeActivation(min=-128, max=127)`
+: レイヤ入力（activation）を量子化します。
+
+- `SparseWeightUnstructured(sparsity=0.5)`
+: レイヤ重みを forward 中のみ非構造スパース化します。
+
+- `SparseActivationUnstructured(sparsity=0.5)`
+: レイヤ入力（activation）を非構造スパース化します。
+
+## Notes
+
+- `apply_layers` を指定しない場合、`Compression.attach` は全サブモジュールに適用を試みます。
+- 圧縮クラス側は `Conv2d/Linear` のみ受け付けるため、通常は `apply_layers` の指定を推奨します。
+
+## Build
 
 ```bash
 python -m pip install -U build twine
 python -m build
 python -m twine check dist/*
-python -m twine upload dist/*
 ```
-
-本番公開前に TestPyPI での確認を推奨します。
