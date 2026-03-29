@@ -1,18 +1,18 @@
-# cizm - Compression Image Models
+# cizm
 
-`cizm` は PyTorch 向けの軽量な圧縮ユーティリティです。
+`cizm` is a lightweight PyTorch compression helper based on forward hooks.
 
-## Install
+## Installation
 
 ```bash
 pip install cizm
 ```
 
-## Overview
+## What It Does
 
-- Hook ベースでモデルに圧縮を適用
-- 対応圧縮: 量子化 / 非構造スパース化
-- 対象レイヤ: `torch.nn.Conv2d`, `torch.nn.Linear`
+- Applies compression at runtime using hooks (no permanent weight rewrite).
+- Supports quantization and unstructured sparsification.
+- Targets `torch.nn.Conv2d` and `torch.nn.Linear`.
 
 ## Quick Start
 
@@ -33,11 +33,13 @@ wrapped.attach(
     sparsity=0.5,
 )
 
-x = torch.randn(4, 128)
+x = torch.randn(128)
 y = wrapped(x)
 ```
 
-## APIs
+## Public API
+
+Top-level exports:
 
 - `cizm.Compression`
 - `cizm.Compressor`
@@ -45,32 +47,20 @@ y = wrapped(x)
 - `cizm.QuantizeActivation`
 - `cizm.SparseWeightUnstructured`
 - `cizm.SparseActivationUnstructured`
-- `cizm.quantize`
-- `cizm.sparsify`
 
 ## Compression Classes
 
-- `QuantizeWeight(min=-128, max=127)`
-: レイヤ重みを forward 中のみ量子化します。
-
-- `QuantizeActivation(min=-128, max=127)`
-: レイヤ入力（activation）を量子化します。
-
-- `SparseWeightUnstructured(sparsity=0.5)`
-: レイヤ重みを forward 中のみ非構造スパース化します。
-
-- `SparseActivationUnstructured(sparsity=0.5)`
-: レイヤ入力（activation）を非構造スパース化します。
+- `QuantizeWeight(min=-128, max=127)`:
+  Quantizes layer weights only during forward, then restores original weights.
+- `QuantizeActivation(min=-128, max=127)`:
+  Quantizes the first input activation of the layer before forward.
+- `SparseWeightUnstructured(sparsity=0.5)`:
+  Applies unstructured sparsity to layer weights only during forward, then restores.
+- `SparseActivationUnstructured(sparsity=0.5)`:
+  Applies unstructured sparsity to the first input activation before forward.
 
 ## Notes
 
-- `apply_layers` を指定しない場合、`Compression.attach` は全サブモジュールに適用を試みます。
-- 圧縮クラス側は `Conv2d/Linear` のみ受け付けるため、通常は `apply_layers` の指定を推奨します。
-
-## Build
-
-```bash
-python -m pip install -U build twine
-python -m build
-python -m twine check dist/*
-```
+- `Compression.attach` uses `filter=` to choose target modules.
+- If `filter` is omitted, it will try all submodules, and unsupported modules will raise an assertion.
+- Supported module types for built-in compressors are `torch.nn.Conv2d` and `torch.nn.Linear`.

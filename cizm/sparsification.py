@@ -6,8 +6,6 @@ import torch
 
 from .base import Compressor
 
-_SUPPORTED_SPARSIFICATION_MODULES = (torch.nn.Conv2d, torch.nn.Linear)
-
 
 def sparsify(x: torch.Tensor, sparsity: float) -> torch.Tensor:
     threshold = x.detach().abs().flatten().quantile(sparsity)
@@ -20,8 +18,6 @@ class SparseWeightUnstructured(Compressor):
     sparsity: float = 0.5
 
     def attach(self, module: torch.nn.Module) -> None:
-        assert isinstance(module, _SUPPORTED_SPARSIFICATION_MODULES), f"{self.__class__.__name__} supports only Conv2d/Linear, got {module.__class__.__name__}"
-
         def pre_hook(mod: torch.nn.Module, _inputs) -> None:
             self._backup = mod.weight.data.detach().clone()
             mod.weight.data.copy_(
@@ -43,8 +39,6 @@ class SparseActivationUnstructured(Compressor):
     sparsity: float = 0.5
 
     def attach(self, module: torch.nn.Module) -> None:
-        assert isinstance(module, _SUPPORTED_SPARSIFICATION_MODULES), f"{self.__class__.__name__} supports only Conv2d/Linear, got {module.__class__.__name__}"
-
         def pre_hook(_module: torch.nn.Module, inputs):
             return (sparsify(inputs[0], sparsity=self.sparsity), *inputs[1:])
 

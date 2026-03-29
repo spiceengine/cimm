@@ -1,5 +1,4 @@
 from __future__ import annotations
-from pygments.unistring import Co
 
 from dataclasses import dataclass
 from typing import Callable
