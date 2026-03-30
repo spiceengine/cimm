@@ -29,7 +29,7 @@ model = torch.nn.Sequential(
 wrapped = Compression(model)
 wrapped.attach(
     SparseWeightUnstructured,
-    apply_layers=lambda m: isinstance(m, torch.nn.Linear),
+    filter=lambda m: isinstance(m, torch.nn.Linear),
     sparsity=0.5,
 )
 
