@@ -2,42 +2,42 @@
 
 ## Project Snapshot
 
-- `cizm` is a lightweight PyTorch compression helper built around forward hooks.
+- `rasnatune` is a lightweight PyTorch compression helper built around forward hooks.
 - The package exposes temporary runtime transformations rather than permanently rewriting model weights.
 - Current packaged version is `0.0.1` in [`pyproject.toml`](pyproject.toml).
 - The codebase is intentionally small: one wrapper module, one abstract base, and two built-in compression families.
 
 ## Repository Layout
 
-- [`cizm/__init__.py`](cizm/__init__.py): top-level public exports.
-- [`cizm/base.py`](cizm/base.py): `Compressor` base class and hook removal helper.
-- [`cizm/compression.py`](cizm/compression.py): `Compression` wrapper that walks a model, attaches compressors, and forwards calls to the wrapped model.
-- [`cizm/quantization.py`](cizm/quantization.py): quantization utility plus weight/activation quantization hooks.
-- [`cizm/sparsification.py`](cizm/sparsification.py): sparsification utility plus weight/activation sparsity hooks.
+- [`rasnatune/__init__.py`](rasnatune/__init__.py): top-level public exports.
+- [`rasnatune/base.py`](rasnatune/base.py): `Compressor` base class and hook removal helper.
+- [`rasnatune/compression.py`](rasnatune/compression.py): `Compression` wrapper that walks a model, attaches compressors, and forwards calls to the wrapped model.
+- [`rasnatune/quantization.py`](rasnatune/quantization.py): quantization utility plus weight/activation quantization hooks.
+- [`rasnatune/sparsification.py`](rasnatune/sparsification.py): sparsification utility plus weight/activation sparsity hooks.
 - [`tests/test_quantization.py`](tests/test_quantization.py): current automated test coverage.
 - [`README.md`](README.md): installation and API overview.
 - [`Makefile`](Makefile): local environment bootstrap and test shortcut.
-- [`.github/workflows/pypi-publish.yml`](.github/workflows/pypi-publish.yml): builds and publishes distributions on `v*` tags.
+- [`.github/workflows/rasnatune-pypi-publish.yml`](.github/workflows/rasnatune-pypi-publish.yml): builds and publishes distributions on `v*` tags.
 
 ## Packaging And Runtime Dependencies
 
 - Package metadata lives in [`pyproject.toml`](pyproject.toml).
 - The only declared runtime dependency is `torch>=2.0`.
 - There is no declared test dependency group yet.
-- Prebuilt artifacts currently exist under [`dist/`](dist).
+- Prebuilt artifacts are not kept in the repository; the publish workflow rebuilds them under `dist/`.
 
 ## Core Architecture
 
 ### `Compressor`
 
-- `Compressor` in [`cizm/base.py`](cizm/base.py) is the minimal abstraction.
+- `Compressor` in [`rasnatune/base.py`](rasnatune/base.py) is the minimal abstraction.
 - Subclasses are expected to implement `attach(module)`.
 - Hook handles are stored in `self._hooks`.
 - `detach()` removes those hook handles, but does not clear metadata or restore any state on its own.
 
 ### `Compression`
 
-- `Compression` in [`cizm/compression.py`](cizm/compression.py) wraps an arbitrary `torch.nn.Module`.
+- `Compression` in [`rasnatune/compression.py`](rasnatune/compression.py) wraps an arbitrary `torch.nn.Module`.
 - `forward()` simply delegates to the wrapped model.
 - `attach(compressor_cls, filter, *args, **kwargs)` walks `self.model.named_modules()`, instantiates one compressor per matching module, and stores the instances in `self.registrations`.
 - The design assumes callers choose target modules with `filter`.
@@ -92,21 +92,21 @@ What is not covered yet:
 These are worth knowing before making changes.
 
 - `Compression.clear()` is broken in the current implementation.
-- In `cizm/compression.py:28`, it calls `self.detach(compressor)`, but `Compression` does not define `detach()`.
+- In `rasnatune/compression.py:28`, it calls `self.detach(compressor)`, but `Compression` does not define `detach()`.
 - In practice, calling `clear()` after registering compressors raises `AttributeError`.
 
 - `sparsify(..., sparsity=0.0)` is not a no-op.
-- In `cizm/sparsification.py:11` and `cizm/sparsification.py:12`, the threshold is the minimum absolute value and the mask uses `> threshold`.
+- In `rasnatune/sparsification.py:11` and `rasnatune/sparsification.py:12`, the threshold is the minimum absolute value and the mask uses `> threshold`.
 - Example observed locally: `tensor([1.0, 2.0])` becomes `[0.0, 2.0]` at `sparsity=0.0`.
 - Tied magnitudes can also cause achieved sparsity to overshoot the requested value.
 
 - Weight restoration is not exception-safe.
-- `cizm/quantization.py:31` and `cizm/sparsification.py:27` restore weights in regular forward hooks.
+- `rasnatune/quantization.py:31` and `rasnatune/sparsification.py:27` restore weights in regular forward hooks.
 - If the wrapped module raises during `forward()`, those hooks do not restore the original weight under the current registration style.
 - This leaves quantized or sparsified weights resident on the module after a failed forward.
 
 - README and code are slightly out of sync.
-- `README.md:64` says `filter` can be omitted, but `cizm/compression.py:20` requires it.
+- `README.md:64` says `filter` can be omitted, but `rasnatune/compression.py:20` requires it.
 - `README.md:65` and `README.md:66` describe assertion-based validation for unsupported modules, but the built-in compressors currently do not perform those assertions.
 
 - Activation compressors only rewrite the first positional input.

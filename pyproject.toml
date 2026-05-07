@@ -3,16 +3,16 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cizm"
+name = "rasnatune"
 version = "0.0.1"
-description = "Compression Image Models: compression utilities for PyTorch"
+description = "Runtime compression tuning utilities for PyTorch"
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{ name = "cizm contributors" }]
+authors = [{ name = "rasnatune contributors" }]
 license = "MIT"
 keywords = ["pytorch", "compression", "sparsification", "quantization"]
 dependencies = ["torch>=2.0"]
 
 [tool.setuptools.packages.find]
-include = ["cizm*"]
+include = ["rasnatune*"]
 exclude = ["__pycache__*"]

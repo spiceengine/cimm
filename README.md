@@ -1,11 +1,11 @@
-# cizm
+# rasnatune
 
-`cizm` is a lightweight PyTorch compression helper based on forward hooks.
+`rasnatune` is a lightweight PyTorch compression helper based on forward hooks.
 
 ## Installation
 
 ```bash
-pip install cizm
+pip install rasnatune
 ```
 
 ## What It Does
@@ -18,7 +18,7 @@ pip install cizm
 
 ```python
 import torch
-from cizm import Compression, SparseWeightUnstructured
+from rasnatune import Compression, SparseWeightUnstructured
 
 model = torch.nn.Sequential(
     torch.nn.Linear(128, 64),
@@ -41,12 +41,12 @@ y = wrapped(x)
 
 Top-level exports:
 
-- `cizm.Compression`
-- `cizm.Compressor`
-- `cizm.QuantizeWeight`
-- `cizm.QuantizeActivation`
-- `cizm.SparseWeightUnstructured`
-- `cizm.SparseActivationUnstructured`
+- `rasnatune.Compression`
+- `rasnatune.Compressor`
+- `rasnatune.QuantizeWeight`
+- `rasnatune.QuantizeActivation`
+- `rasnatune.SparseWeightUnstructured`
+- `rasnatune.SparseActivationUnstructured`
 
 ## Compression Classes
 

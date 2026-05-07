@@ -25,7 +25,11 @@ class Compression(torch.nn.Module):
             instance.attach(module)
             self.registrations.append(instance)
 
+    def detach(self, compressor: Compressor):
+        compressor.detach(self.model)
+        if compressor in self.registrations:
+            self.registrations.remove(compressor)
+
     def clear(self):
-        for compressor in self.registrations:
+        for compressor in list(self.registrations):
             self.detach(compressor)
-        self.registrations.clear()
