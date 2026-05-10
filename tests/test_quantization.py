@@ -1,7 +1,14 @@
 import torch
 import torch.nn.functional as F
 
-from rasnatune.quantization import QuantizeActivation, QuantizeWeight, quantize
+from rasnatune.quantization import (
+    QuantizeActivation,
+    QuantizeMAC,
+    QuantizeWeight,
+    _quantize_tensor,
+    quantize_accumulator,
+)
+from rasnatune.sparsification import sparsify
 
 
 def _make_linear() -> torch.nn.Linear:
@@ -23,7 +30,7 @@ def _make_conv2d() -> torch.nn.Conv2d:
 def test_quantize_maps_values_to_expected_levels() -> None:
     x = torch.tensor([-3.0, -1.0, 0.0, 1.0, 3.0], dtype=torch.float32)
 
-    actual = quantize(x, qmin=-2, qmax=2)
+    actual = _quantize_tensor(x, qmin=-2, qmax=2)
     expected = torch.tensor([-3.0, -1.5, 0.0, 1.5, 3.0], dtype=torch.float32)
 
     torch.testing.assert_close(actual, expected)
@@ -32,7 +39,7 @@ def test_quantize_maps_values_to_expected_levels() -> None:
 def test_quantize_clamps_to_asymmetric_range() -> None:
     x = torch.tensor([-2.0, -0.6, 0.2, 1.7], dtype=torch.float32)
 
-    actual = quantize(x, qmin=-1, qmax=2)
+    actual = _quantize_tensor(x, qmin=-1, qmax=2)
     expected = torch.tensor([-1.0, -1.0, 0.0, 2.0], dtype=torch.float32)
 
     torch.testing.assert_close(actual, expected)
@@ -42,7 +49,7 @@ def test_quantize_preserves_straight_through_gradients() -> None:
     x = torch.tensor([0.3, -0.6], dtype=torch.float32, requires_grad=True)
     upstream = torch.tensor([2.0, -3.0], dtype=torch.float32)
 
-    loss = (quantize(x, qmin=-2, qmax=1) * upstream).sum()
+    loss = (_quantize_tensor(x, qmin=-2, qmax=1) * upstream).sum()
     loss.backward()
 
     torch.testing.assert_close(x.grad, upstream)
@@ -51,12 +58,31 @@ def test_quantize_preserves_straight_through_gradients() -> None:
 def test_quantize_zero_tensor_returns_zero_without_nan() -> None:
     x = torch.zeros(4, dtype=torch.float32, requires_grad=True)
 
-    actual = quantize(x, qmin=-128, qmax=127)
+    actual = _quantize_tensor(x, qmin=-128, qmax=127)
     actual.sum().backward()
 
     torch.testing.assert_close(actual, torch.zeros_like(x))
     torch.testing.assert_close(x.grad, torch.ones_like(x))
     assert torch.isfinite(actual).all().item()
+
+
+def test_quantize_accumulator_wraps_signed_range() -> None:
+    x = torch.tensor([-5.0, -4.0, -3.0, 3.0, 4.0, 5.0], dtype=torch.float32)
+
+    actual = quantize_accumulator(x, bits=3, scale=1.0)
+    expected = torch.tensor([3.0, -4.0, -3.0, 3.0, -4.0, -3.0], dtype=torch.float32)
+
+    torch.testing.assert_close(actual, expected)
+
+
+def test_quantize_accumulator_preserves_straight_through_gradients() -> None:
+    x = torch.tensor([4.0, -5.0], dtype=torch.float32, requires_grad=True)
+    upstream = torch.tensor([2.0, -3.0], dtype=torch.float32)
+
+    loss = (quantize_accumulator(x, bits=3, scale=1.0) * upstream).sum()
+    loss.backward()
+
+    torch.testing.assert_close(x.grad, upstream)
 
 
 def test_quantize_weight_applies_and_restores_on_linear() -> None:
@@ -68,7 +94,7 @@ def test_quantize_weight_applies_and_restores_on_linear() -> None:
     compressor.attach(module)
     actual = module(x)
 
-    expected_weight = quantize(original_weight, qmin=-1, qmax=1)
+    expected_weight = _quantize_tensor(original_weight, qmin=-1, qmax=1)
     expected = F.linear(x, expected_weight)
 
     torch.testing.assert_close(actual, expected)
@@ -84,7 +110,7 @@ def test_quantize_weight_applies_and_restores_on_conv2d() -> None:
     compressor.attach(module)
     actual = module(x)
 
-    expected_weight = quantize(original_weight, qmin=-1, qmax=1)
+    expected_weight = _quantize_tensor(original_weight, qmin=-1, qmax=1)
     expected = F.conv2d(x, expected_weight)
 
     torch.testing.assert_close(actual, expected)
@@ -99,7 +125,7 @@ def test_quantize_activation_applies_to_linear_inputs() -> None:
     compressor.attach(module)
     actual = module(x)
 
-    expected = F.linear(quantize(x, qmin=-1, qmax=1), module.weight.detach())
+    expected = F.linear(_quantize_tensor(x, qmin=-1, qmax=1), module.weight.detach())
 
     torch.testing.assert_close(actual, expected)
 
@@ -117,7 +143,7 @@ def test_quantize_activation_applies_to_conv2d_inputs() -> None:
     compressor.attach(module)
     actual = module(x)
 
-    expected = F.conv2d(quantize(x, qmin=-1, qmax=1), module.weight.detach())
+    expected = F.conv2d(_quantize_tensor(x, qmin=-1, qmax=1), module.weight.detach())
 
     torch.testing.assert_close(actual, expected)
 
@@ -125,3 +151,87 @@ def test_quantize_activation_applies_to_conv2d_inputs() -> None:
     restored = module(x)
     torch.testing.assert_close(restored, F.conv2d(x, module.weight.detach()))
     assert not torch.equal(actual, restored)
+
+
+def test_quantize_mac_applies_activation_weight_and_accumulator_to_linear() -> None:
+    module = torch.nn.Linear(2, 1, bias=False)
+    with torch.no_grad():
+        module.weight.copy_(torch.tensor([[3.0, -4.0]], dtype=torch.float32))
+    compressor = QuantizeMAC(activation_bits=3, weight_bits=3, accumulator_bits=4)
+    x = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+    original_weight = module.weight.detach().clone()
+
+    compressor.attach(module)
+    actual = module(x)
+
+    quantized_x = _quantize_tensor(x, qmin=-4, qmax=3)
+    quantized_weight = _quantize_tensor(original_weight, qmin=-4, qmax=3)
+    accumulator_scale = (x.detach().abs().max() / 4) * (original_weight.abs().max() / 4)
+    expected_output = F.linear(quantized_x, quantized_weight)
+    expected = quantize_accumulator(
+        expected_output,
+        bits=4,
+        scale=accumulator_scale,
+    )
+
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(module.weight.detach(), original_weight)
+
+    compressor.detach(module)
+    restored = module(x)
+    torch.testing.assert_close(restored, F.linear(x, original_weight))
+    assert not torch.equal(actual, restored)
+
+
+def test_quantize_mac_applies_activation_weight_and_accumulator_to_conv2d() -> None:
+    module = torch.nn.Conv2d(1, 1, kernel_size=2, bias=False)
+    with torch.no_grad():
+        module.weight.copy_(
+            torch.tensor([[[[3.0, -4.0], [2.0, -1.0]]]], dtype=torch.float32)
+        )
+    compressor = QuantizeMAC(activation_bits=3, weight_bits=3, accumulator_bits=4)
+    x = torch.tensor([[[[1.0, 2.0], [3.0, 4.0]]]], dtype=torch.float32)
+    original_weight = module.weight.detach().clone()
+
+    compressor.attach(module)
+    actual = module(x)
+
+    quantized_x = _quantize_tensor(x, qmin=-4, qmax=3)
+    quantized_weight = _quantize_tensor(original_weight, qmin=-4, qmax=3)
+    accumulator_scale = (x.detach().abs().max() / 4) * (original_weight.abs().max() / 4)
+    expected_output = F.conv2d(quantized_x, quantized_weight)
+    expected = quantize_accumulator(
+        expected_output,
+        bits=4,
+        scale=accumulator_scale,
+    )
+
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(module.weight.detach(), original_weight)
+
+
+def test_quantize_mac_can_sparsify_weights_before_quantization() -> None:
+    module = torch.nn.Linear(4, 1, bias=False)
+    with torch.no_grad():
+        module.weight.copy_(torch.tensor([[1.0, -2.0, 3.0, -4.0]], dtype=torch.float32))
+    compressor = QuantizeMAC(
+        activation_bits=3,
+        weight_bits=3,
+        accumulator_bits=5,
+        weight_sparsity=0.5,
+    )
+    x = torch.tensor([[1.0, 2.0, 3.0, 4.0]], dtype=torch.float32)
+    original_weight = module.weight.detach().clone()
+
+    compressor.attach(module)
+    actual = module(x)
+
+    quantized_x = _quantize_tensor(x, qmin=-4, qmax=3)
+    sparse_weight = sparsify(original_weight, sparsity=0.5)
+    quantized_weight = _quantize_tensor(sparse_weight, qmin=-4, qmax=3)
+    accumulator_scale = (x.detach().abs().max() / 4) * (original_weight.abs().max() / 4)
+    expected_output = F.linear(quantized_x, quantized_weight)
+    expected = quantize_accumulator(expected_output, bits=5, scale=accumulator_scale)
+
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(module.weight.detach(), original_weight)

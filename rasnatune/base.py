@@ -11,5 +11,6 @@ class Compressor:
         raise NotImplementedError
 
     def detach(self, module: torch.nn.Module) -> None:
-        for hook in self._hooks:
+        for hook in getattr(self, "_hooks", []):
             hook.remove()
+        self._hooks = []

@@ -1,135 +1,122 @@
 # AGENTS.md
 
-## Project Snapshot
+## プロジェクト概要
 
-- `rasnatune` is a lightweight PyTorch compression helper built around forward hooks.
-- The package exposes temporary runtime transformations rather than permanently rewriting model weights.
-- Current packaged version is `0.0.1` in [`pyproject.toml`](pyproject.toml).
-- The codebase is intentionally small: one wrapper module, one abstract base, and two built-in compression families.
+- `rasnatune` は forward hook を使った軽量な PyTorch 圧縮ヘルパーです。
+- モデルの重みを恒久的に書き換えるのではなく、実行時だけ一時的な変換を差し込みます。
+- 現在のパッケージ版は [`pyproject.toml`](pyproject.toml) の `0.0.2` です。
+- コードベースは小さく保たれています。recipe API、抽象基底、量子化、スパース化が中心です。
 
-## Repository Layout
+## リポジトリ構成
 
-- [`rasnatune/__init__.py`](rasnatune/__init__.py): top-level public exports.
-- [`rasnatune/base.py`](rasnatune/base.py): `Compressor` base class and hook removal helper.
-- [`rasnatune/compression.py`](rasnatune/compression.py): `Compression` wrapper that walks a model, attaches compressors, and forwards calls to the wrapped model.
-- [`rasnatune/quantization.py`](rasnatune/quantization.py): quantization utility plus weight/activation quantization hooks.
-- [`rasnatune/sparsification.py`](rasnatune/sparsification.py): sparsification utility plus weight/activation sparsity hooks.
-- [`tests/test_quantization.py`](tests/test_quantization.py): current automated test coverage.
-- [`README.md`](README.md): installation and API overview.
-- [`Makefile`](Makefile): local environment bootstrap and test shortcut.
-- [`.github/workflows/rasnatune-pypi-publish.yml`](.github/workflows/rasnatune-pypi-publish.yml): builds and publishes distributions on `v*` tags.
+- [`rasnatune/__init__.py`](rasnatune/__init__.py): トップレベルの公開 API。
+- [`rasnatune/base.py`](rasnatune/base.py): `Compressor` 基底クラスと hook 解除ヘルパー。
+- [`rasnatune/compression.py`](rasnatune/compression.py): in-place な `compress()` API、recipe ヘルパー、モデル単位の登録管理、cleanup。
+- [`rasnatune/quantization.py`](rasnatune/quantization.py): 量子化ユーティリティ、weight / activation / MAC 量子化 hook。
+- [`rasnatune/sparsification.py`](rasnatune/sparsification.py): スパース化ユーティリティ、weight / activation スパース化 hook。
+- [`tests/test_quantization.py`](tests/test_quantization.py): 量子化まわりのテスト。
+- [`tests/test_sparsification.py`](tests/test_sparsification.py): スパース化まわりのテスト。
+- [`tests/test_compression.py`](tests/test_compression.py): recipe API と統合挙動のテスト。
+- [`README.md`](README.md): インストール方法と API 概要。
+- [`Makefile`](Makefile): ローカル環境作成とテストのショートカット。
+- [`.github/workflows/rasnatune-pypi-publish.yml`](.github/workflows/rasnatune-pypi-publish.yml): `v*` タグで distribution をビルドし PyPI へ publish します。
 
-## Packaging And Runtime Dependencies
+## パッケージングと依存関係
 
-- Package metadata lives in [`pyproject.toml`](pyproject.toml).
-- The only declared runtime dependency is `torch>=2.0`.
-- There is no declared test dependency group yet.
-- Prebuilt artifacts are not kept in the repository; the publish workflow rebuilds them under `dist/`.
+- パッケージメタデータは [`pyproject.toml`](pyproject.toml) にあります。
+- runtime dependency は `torch>=2.0` のみです。
+- test dependency group はまだありません。
+- ビルド済み artifact はリポジトリに保持しない方針です。publish workflow が `dist/` を作り直します。
 
-## Core Architecture
+## コア設計
 
 ### `Compressor`
 
-- `Compressor` in [`rasnatune/base.py`](rasnatune/base.py) is the minimal abstraction.
-- Subclasses are expected to implement `attach(module)`.
-- Hook handles are stored in `self._hooks`.
-- `detach()` removes those hook handles, but does not clear metadata or restore any state on its own.
+- [`rasnatune/base.py`](rasnatune/base.py) の `Compressor` が最小の抽象です。
+- サブクラスは `attach(module)` を実装します。
+- hook handle は `self._hooks` に保存します。
+- `detach()` は hook handle を remove し、`self._hooks` を空にします。
 
-### `Compression`
+### In-Place Compression API
 
-- `Compression` in [`rasnatune/compression.py`](rasnatune/compression.py) wraps an arbitrary `torch.nn.Module`.
-- `forward()` simply delegates to the wrapped model.
-- `attach(compressor_cls, filter, *args, **kwargs)` walks `self.model.named_modules()`, instantiates one compressor per matching module, and stores the instances in `self.registrations`.
-- The design assumes callers choose target modules with `filter`.
+- [`rasnatune/compression.py`](rasnatune/compression.py) の `compress(model, *recipes)` は、ユーザーのモデルへ直接 hook を取り付け、同じ model インスタンスを返します。
+- `remove_compression(model)` は、そのモデルに登録された compressor を解除します。
+- `compression_count(model)` は active な compressor 登録数を返します。
+- recipe API には `quantize()`, `sparse()` があります。
+- `quantize(weight_sparsity=...)` は weight をスパース化してから量子化するため、weight を書き換える recipe を別々に重ねずにスパース化 + MAC 量子化を表現できます。
+- recipe の `targets=` は必須です。
+- `targets=` には module 型、module 型の tuple、または predicate を渡せます。
+- `compress()` は wrapper module を作らないため、`state_dict()` のキーは元モデルのまま維持されます。
 
-### Quantization Path
+### 量子化パス
 
-- `quantize(x, qmin, qmax)` computes a scale from the maximum absolute value, rounds into the requested integer range, and returns a straight-through-estimator style tensor.
-- `QuantizeWeight` temporarily rewrites `module.weight.data` in a forward pre-hook, then restores the original weight in a forward hook.
-- `QuantizeActivation` rewrites only the first positional input in a forward pre-hook.
+- 内部の tensor 量子化処理は最大絶対値から scale を計算し、指定整数範囲へ丸め、straight-through estimator 形式の tensor を返します。
+- `quantize_accumulator(x, bits, scale)` は signed accumulator 幅で wrap-around し、straight-through estimator 形式で返します。
+- `QuantizeWeight` は forward pre-hook で `module.weight.data` を一時的に量子化し、forward hook で元の重みへ戻します。
+- `QuantizeActivation` は forward pre-hook で最初の positional input だけを書き換えます。
+- `QuantizeMAC` は最初の positional input と weight を量子化し、module 演算は FP32 で実行し、最終出力へ signed accumulator wrap-around を適用します。`weight_sparsity > 0` の場合は、weight をスパース化してから量子化します。
 
-### Sparsification Path
+### スパース化パス
 
-- `sparsify(x, sparsity)` computes an absolute-value threshold via `quantile` and zeroes entries below or equal to that threshold.
-- `SparseWeightUnstructured` follows the same backup/mutate/restore hook pattern as `QuantizeWeight`.
-- `SparseActivationUnstructured` rewrites only the first positional input in a forward pre-hook.
+- `sparsify(x, sparsity)` は絶対値の小さい要素を指定割合だけ 0 にします。
+- `SparseWeightUnstructured` は `QuantizeWeight` と同じ backup / mutate / restore hook パターンです。
+- activation スパース化 API は削除済みです。
 
-## Makefile And Local Workflow
+## Makefile とローカルワークフロー
 
-The current [`Makefile`](Makefile) defines two targets:
+現在の [`Makefile`](Makefile) には 2 つの target があります。
 
 - `make activate`
-- Creates `./.venv` with `python3 -m venv`.
-- Installs `torch` and `torchvision`.
+  - `python3 -m venv` で `./.venv` を作ります。
+  - `torch` と `torchvision` をインストールします。
 
 - `make test`
-- Runs `./.venv/bin/pytest tests/`.
+  - `./.venv/bin/pytest tests/` を実行します。
 
-Important caveat:
+注意点:
 
-- `make activate` does not install `pytest`, so `make test` currently fails unless `pytest` is installed manually into `./.venv`.
+- `make activate` は `pytest` をインストールしません。そのため、`pytest` を手動で `./.venv` に入れていない場合、`make test` は失敗します。
 
-## Current Test Coverage
+## 現在のテスト範囲
 
-Automated coverage is currently limited to quantization:
+自動テストは現在以下をカバーしています。
 
-- `quantize()` numeric behavior for symmetric and asymmetric ranges.
-- `quantize()` straight-through gradient behavior.
-- `quantize()` zero-input stability.
-- `QuantizeWeight` successful forward behavior and weight restoration after normal execution.
-- `QuantizeWeight.detach()` behavior.
-- `QuantizeActivation` first-positional-input rewriting and detach behavior.
+- 内部 tensor 量子化処理の symmetric / asymmetric range に対する数値挙動。
+- 内部 tensor 量子化処理の straight-through gradient。
+- 内部 tensor 量子化処理の zero tensor 安定性。
+- `quantize_accumulator()` の wrap-around と straight-through gradient。
+- `QuantizeWeight` の forward 挙動と通常実行後の weight 復元。
+- `QuantizeWeight.detach()` の挙動。
+- `QuantizeActivation` が最初の positional input を書き換えること、および detach 挙動。
+- `QuantizeMAC` の `Linear` / `Conv2d` に対する挙動。
+- `compress()` の in-place 挙動、recipe targeting、cleanup、`state_dict()` key 維持。
+- スパース化ユーティリティと hook 挙動。
 
-What is not covered yet:
+## 既知の注意点
 
-- `Compression.attach()` and `Compression.clear()`.
-- Any sparsification behavior.
-- Exception safety for weight compressors.
-- README examples as executable integration tests.
+- activation 系 compressor は最初の positional input だけを書き換えます。
+- これは現在の意図した実装ですが、複数 tensor 引数や keyword-only tensor を受け取る module では見落としやすいです。
 
-## Known Issues And Current Caveats
+- 圧縮は runtime hook によって適用されます。
+- `model.state_dict()` を保存する場合、元モデルの key は維持されます。
+- 圧縮が active な model object 全体を pickle すると、runtime hook も object の一部になります。基本的には `state_dict()` 保存を使うか、full-object serialization の前に `remove_compression(model)` を呼ぶ方針を推奨します。
 
-These are worth knowing before making changes.
+## 今後の変更時の実務メモ
 
-- `Compression.clear()` is broken in the current implementation.
-- In `rasnatune/compression.py:28`, it calls `self.detach(compressor)`, but `Compression` does not define `detach()`.
-- In practice, calling `clear()` after registering compressors raises `AttributeError`.
+- hook 挙動を変更する場合は、通常 forward、detach / cleanup、forward 中の例外をテストしてください。
+- `compress()` や recipe を触る場合は、登録数、`targets=` による module 選択、`state_dict()` key 維持、cleanup の直接テストを追加してください。
+- compressor の適用対象や意味を変える場合は、[`README.md`](README.md) と関連テストを同時に更新してください。
+- `make test` を維持するなら、環境作成が必要なテストツールをインストールするか、optional dependency group へ移すかを検討してください。
+- スパース化を再設計する場合は、`sparsity=0.0`, `sparsity=1.0`, quantile 付近で値が重複する場合の意味を先に固定してください。
 
-- `sparsify(..., sparsity=0.0)` is not a no-op.
-- In `rasnatune/sparsification.py:11` and `rasnatune/sparsification.py:12`, the threshold is the minimum absolute value and the mask uses `> threshold`.
-- Example observed locally: `tensor([1.0, 2.0])` becomes `[0.0, 2.0]` at `sparsity=0.0`.
-- Tied magnitudes can also cause achieved sparsity to overshoot the requested value.
+## リリースフロー
 
-- Weight restoration is not exception-safe.
-- `rasnatune/quantization.py:31` and `rasnatune/sparsification.py:27` restore weights in regular forward hooks.
-- If the wrapped module raises during `forward()`, those hooks do not restore the original weight under the current registration style.
-- This leaves quantized or sparsified weights resident on the module after a failed forward.
+- パッケージングは `setuptools.build_meta` を使います。
+- `v*` に一致するタグが push されると GitHub Actions が PyPI へ publish します。
+- workflow は `python -m build` で distribution を作り、`pypa/gh-action-pypi-publish` で publish します。
 
-- README and code are slightly out of sync.
-- `README.md:64` says `filter` can be omitted, but `rasnatune/compression.py:20` requires it.
-- `README.md:65` and `README.md:66` describe assertion-based validation for unsupported modules, but the built-in compressors currently do not perform those assertions.
+## 推奨される次の作業
 
-- Activation compressors only rewrite the first positional input.
-- This is intentional in the current implementation, but easy to miss if a module takes multiple tensor arguments or keyword-only tensors.
-
-## Practical Guidance For Future Changes
-
-- If you modify hook behavior, test normal forward, detach/cleanup, and exception during forward.
-- If you touch `Compression`, add direct tests for registration count, module selection via `filter`, and cleanup behavior.
-- If you change compressor applicability, update both [`README.md`](README.md) and the relevant tests under [`tests/`](tests).
-- If you keep `make test`, also make sure the environment setup installs the tools it expects.
-- Before refactoring sparsification, lock in intended semantics for `sparsity=0.0`, `sparsity=1.0`, and duplicate magnitudes around the quantile threshold.
-
-## Release Flow
-
-- Packaging uses `setuptools.build_meta`.
-- GitHub Actions publishes to PyPI when a tag matching `v*` is pushed.
-- The workflow builds distributions with `python -m build` and publishes via `pypa/gh-action-pypi-publish`.
-
-## Recommended Next Steps
-
-- Fix `Compression.clear()` and add direct tests for the wrapper class.
-- Add a full test module for sparsification.
-- Make weight restoration exception-safe.
-- Align README claims with the current implementation.
-- Decide whether `Makefile` should install test dependencies or whether testing should move to a documented optional dependency group.
+- `Makefile` が test dependency を入れるべきか、あるいは documented optional dependency group に移すべきかを決める。
+- README のサンプルを実行可能なテストとして追加する。
+- `QuantizeMAC` に `overflow="saturate"` を追加する。

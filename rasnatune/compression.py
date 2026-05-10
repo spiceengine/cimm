@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import torch
@@ -8,28 +8,54 @@ import torch
 from .base import Compressor
 
 
-class Compression(torch.nn.Module):
-    def __init__(self, model: torch.nn.Module):
-        super().__init__()
-        self.model = model
-        self.registrations: list[Compressor] = []
+def _registry(model: torch.nn.Module) -> list[Compressor]:
+    registry = getattr(model, "_rasnatune_compressors", None)
+    if registry is None:
+        registry = []
+        setattr(model, "_rasnatune_compressors", registry)
+    return registry
 
-    def forward(self, *args, **kwargs):
-        return self.model(*args, **kwargs)
 
-    def attach(self, compressor: type[Compressor], filter: Callable, *args, **kwargs,):
-        for name, module in self.model.named_modules():
-            if not filter(module):
+@dataclass(frozen=True)
+class Recipe:
+    compressor: type[Compressor]
+    targets: Callable[[torch.nn.Module], bool] | type[torch.nn.Module] | tuple[type[torch.nn.Module], ...]
+    kwargs: dict = field(default_factory=dict)
+
+    def apply(self, model: torch.nn.Module) -> list[Compressor]:
+        if isinstance(self.targets, type):
+            selected = lambda module: isinstance(module, self.targets)
+        elif isinstance(self.targets, tuple) and all(isinstance(target, type) for target in self.targets):
+            selected = lambda module: isinstance(module, self.targets)
+        elif callable(self.targets):
+            selected = self.targets
+        else:
+            raise TypeError("targets must be a module type, tuple of module types, or callable")
+
+        registrations: list[Compressor] = []
+        for module in model.modules():
+            if not selected(module):
                 continue
-            instance = compressor(*args, **kwargs)
-            instance.attach(module)
-            self.registrations.append(instance)
+            compressor = self.compressor(**self.kwargs)
+            compressor.attach(module)
+            registrations.append(compressor)
+        return registrations
 
-    def detach(self, compressor: Compressor):
-        compressor.detach(self.model)
-        if compressor in self.registrations:
-            self.registrations.remove(compressor)
 
-    def clear(self):
-        for compressor in list(self.registrations):
-            self.detach(compressor)
+def compress(model: torch.nn.Module, *recipes: Recipe) -> torch.nn.Module:
+    registry = _registry(model)
+    for recipe in recipes:
+        registry.extend(recipe.apply(model))
+    return model
+
+
+def remove_compression(model: torch.nn.Module) -> torch.nn.Module:
+    registry = _registry(model)
+    for compressor in list(registry):
+        compressor.detach(model)
+    registry.clear()
+    return model
+
+
+def compression_count(model: torch.nn.Module) -> int:
+    return len(_registry(model))

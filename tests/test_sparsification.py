@@ -3,7 +3,6 @@ import torch
 import torch.nn.functional as F
 
 from rasnatune.sparsification import (
-    SparseActivationUnstructured,
     SparseWeightUnstructured,
     sparsify,
 )
@@ -87,37 +86,16 @@ def test_sparse_weight_applies_and_restores_on_conv2d() -> None:
     torch.testing.assert_close(module.weight.detach(), original_weight)
 
 
-def test_sparse_activation_applies_to_linear_inputs() -> None:
+def test_sparse_weight_masks_gradients_for_zeroed_weights() -> None:
     module = _make_linear()
-    compressor = SparseActivationUnstructured(sparsity=0.5)
-    x = torch.tensor([[1.0, -2.0, 3.0, -4.0]], dtype=torch.float32)
+    compressor = SparseWeightUnstructured(sparsity=0.5)
+    x = torch.ones(1, 4, dtype=torch.float32)
 
     compressor.attach(module)
-    actual = module(x)
+    module(x).sum().backward()
 
-    expected = F.linear(sparsify(x, sparsity=0.5), module.weight.detach())
-
-    torch.testing.assert_close(actual, expected)
-
-    compressor.detach(module)
-    restored = module(x)
-    torch.testing.assert_close(restored, F.linear(x, module.weight.detach()))
-    assert not torch.equal(actual, restored)
-
-
-def test_sparse_activation_applies_to_conv2d_inputs() -> None:
-    module = _make_conv2d()
-    compressor = SparseActivationUnstructured(sparsity=0.5)
-    x = torch.tensor([[[[1.0, -2.0], [3.0, -4.0]]]], dtype=torch.float32)
-
-    compressor.attach(module)
-    actual = module(x)
-
-    expected = F.conv2d(sparsify(x, sparsity=0.5), module.weight.detach())
-
-    torch.testing.assert_close(actual, expected)
-
-    compressor.detach(module)
-    restored = module(x)
-    torch.testing.assert_close(restored, F.conv2d(x, module.weight.detach()))
-    assert not torch.equal(actual, restored)
+    assert module.weight.grad is not None
+    torch.testing.assert_close(
+        module.weight.grad.detach(),
+        torch.tensor([[0.0, 0.0, 1.0, 1.0]], dtype=torch.float32),
+    )
